@@ -130,7 +130,6 @@ sudo apt install postgresql-17
 
 ![img_8.png](img/img_8.png)
 
-
 **Создание пользователя replicator и rewind_user:**
 
 ```sql
@@ -139,13 +138,16 @@ create user rewind_user login superuser password 'rewind_user';
 ```
 
 **Редактирование файла pg_hba.conf:**
+
 ```
 host all all 0.0.0.0/0 scram-sha-256
 host replication replicator 0.0.0.0/0 scram-sha-256
 ```
+
 ![img_9.png](img/img_9.png)
 
 **Редактирование файла postgresql.conf:**
+
 ```
 listen_address = '*'
 ```
@@ -157,19 +159,25 @@ sudo -u postgres pg_lsclusters
 ````
 
 ![img_10.png](img/img_10.png)
+
 ![img_11.png](img/img_11.png)
+
 ![img_12.png](img/img_12.png)
 
-
 **На второй и третьей ноде удалить содержимое каталога pgdata:**
+
 ```bash
 sudo systemctl stop postgresql
 rm -rf /var/lib/postgresql/17/main/*
 ```
 
-## 4. Установка Patroni
+## 4. Установка и настройка Patroni
 
-1. Ставим модуль для создания виртуальных окружений
+### 4.1. Подготовка окружения
+
+Для корректной работы Patroni необходимо установить вспомогательные утилиты и подготовить окружение:
+
+1. **Установка модуля для создания виртуальных окружений:**
 
 ```bash
 sudo apt install python3-venv
@@ -177,25 +185,25 @@ sudo apt install python3-venv
 
 ![img_13.png](img/img_13.png)
 
-2. Создаём каталог для Patroni.
+2. **Создание каталога для Patroni:**
 
 ```bash
 sudo mkdir -p /opt/patroni
 ```
 
-3. Передаём владение каталогом пользователю postgres
+3. **Назначение владельца каталога:**
 
 ```bash
 sudo chown postgres:postgres /opt/patroni
 ```
 
-4. Создаём виртуальное окружение от имени postgres.
+4. **Создание виртуального окружения от имени пользователя `postgres`:**
 
 ```bash
 sudo -u postgres python3 -m venv /opt/patroni/venv
 ```
 
-5. Устанавливаем Patroni с поддержкой etcd3.
+5. **Установка Patroni с поддержкой etcd3:**
 
 ```bash
 sudo -u postgres /opt/patroni/venv/bin/pip install 'patroni[etcd3]'
@@ -203,34 +211,54 @@ sudo -u postgres /opt/patroni/venv/bin/pip install 'patroni[etcd3]'
 
 ![img_14.png](img/img_14.png)
 
-6. Устанавливаем драйвер для работы Patroni с PostgreSQL.
+6. **Установка драйвера для взаимодействия с PostgreSQL:**
 
 ```bash
-sudo -u postgres /opt/patroni/venv/bin/pip install 'psycopg2-binary'
+sudo -u postgres /opt/patroni/venv/bin/pip install psycopg2-binary
 ```
 
 ![img_15.png](img/img_15.png)
 
-7. Создаём конфигурационный файл Patroni.
+### 4.2. Настройка сервиса Patroni
+
+1. **Создание конфигурационного файла:**
+
 ```bash
 sudo vi /etc/patroni.yml
+```
+
+2. **Создание systemd-юнита:**
+
+```bash
 sudo vi /etc/systemd/system/patroni.service
 ```
 
-При попытке запустить patroni 
-
 ![img_16.png](img/img_16.png)
 
-Поскольку устанавливали через виртуальное окружение нужно поменять
-```
+> ⚠️Так как Patroni установлен в виртуальное окружение, необходимо изменить путь в `ExecStart`:
+
+```ini
 ExecStart=/usr/local/bin/patroni /etc/patroni.yml
 ```
-на 
-```
+
+заменить на:
+
+```ini
 ExecStart=/opt/patroni/venv/bin/patroni /etc/patroni.yml
 ```
 
-После рестарта 
+3. **Перезагрузка systemd и запуск сервиса:**
+
+```bash
+sudo systemctl daemon-reexec
+sudo systemctl daemon-reload
+sudo systemctl start patroni
+sudo systemctl enable patroni
+```
+
+### 4.3. Устранение ошибок запуска
+
+Во время первой попытки запуска была получена ошибка:
 
 ```
 could not access the server configuration file "/var/lib/postgresql/17/main/postgresql.conf": No such file or directory
@@ -238,7 +266,10 @@ could not access the server configuration file "/var/lib/postgresql/17/main/post
 
 ![img_17.png](img/img_17.png)
 
-Пересоздадим каталог с нужными правами:
+Для исправления произведены следующие действия:
+
+1. **Очистка и пересоздание каталога данных PostgreSQL:**
+
 ```bash
 sudo systemctl stop postgresql || true
 sudo rm -rf /var/lib/postgresql/17/main
@@ -246,44 +277,47 @@ sudo mkdir -p /var/lib/postgresql/17/main
 sudo chown -R postgres:postgres /var/lib/postgresql/17
 sudo chmod 700 /var/lib/postgresql/17/main
 ```
-
 Первая нода определилась как реплика:
 
 ![img_18.png](img/img_18.png)
 
-
-
-Пересоздадим кластер:
+2. **Очистка кластера Patroni в etcd:**
 
 ```bash
 sudo -u postgres /opt/patroni/venv/bin/patronictl -c /etc/patroni.yml remove postgres-cluster
-ETCDCTL_API=2 etcdctl --endpoints="http://192.168.139.129:2379,http://192.168.139.142:2379,http://192.168.139.90:2379" ls /db
+```
+
+3. **Очистка данных в etcd:**
+
+```bash
+ETCDCTL_API=2 etcdctl --endpoints="http://192.168.139.129:2379,http://192.168.139.142:2379,http://192.168.139.90:2379" rm /db --recursive
 ```
 
 ![img_25.png](img/img_25.png)
 
 ![img_26.png](img/img_26.png)
 
-Проверка
+### 4.4. Проверка состояния кластера
+
+1. **Проверка текущего состояния кластера Patroni:**
+
 ```bash
 sudo -u postgres /opt/patroni/venv/bin/patronictl -c /etc/patroni.yml list
 ```
 
 ![img_27.png](img/img_27.png)
 
+2. **Аналогичные действия выполнены на второй и третьей нодах.**
 
-Проделываем тоже самое на второй и третьей ноде
-
-Ошибка на второй ноде 
+> ⚠️ На второй и третьей нодах были получены ошибки запуска, связанные с поврежденным состоянием каталогов данных
+> PostgreSQL.
 
 ![img_19.png](img/img_19.png)
 
-Ошибка на третьей ноде
-
 ![img_20.png](img/img_20.png)
 
+3. **Решение: очистка каталогов и повторный запуск:**
 
-Пересоздадим директории:
 ```bash
 sudo systemctl stop postgresql || true
 sudo rm -rf /var/lib/postgresql/17/main
@@ -292,19 +326,17 @@ sudo chown -R postgres:postgres /var/lib/postgresql/17
 sudo chmod 700 /var/lib/postgresql/17/main
 ```
 
-После очистки директорий статусы:
+4. **Статусы после восстановления:**
 
 ![img_22.png](img/img_22.png)
 
 ![img_23.png](img/img_23.png)
 
-Проверка
+5. **Финальная проверка:**
 
 ```bash
 sudo -u postgres /opt/patroni/venv/bin/patronictl -c /etc/patroni.yml list
 ```
-
-![img_28.png](img/img_28.png)
 
 ![img_29.png](img/img_29.png)
 
