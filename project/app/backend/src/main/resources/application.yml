@@ -1,0 +1,10 @@
+
+spring:
+  datasource:
+    url: jdbc:postgresql://192.168.139.90:5000/demo
+    username: postgres
+    password: postgres
+  jpa:
+    hibernate:
+      ddl-auto: none
+    show-sql: true

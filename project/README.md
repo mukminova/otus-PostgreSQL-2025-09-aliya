@@ -431,3 +431,70 @@ sudo -u postgres /opt/patroni/venv/bin/patronictl -c /etc/patroni.yml failover
 
 ![img_34.png](img/img_34.png)
 
+
+## 6. Установка и настройка HAProxy
+
+### 6.1. Установка HAProxy
+
+На виртуальную машину был установлен HAProxy:
+
+```bash
+sudo apt update
+sudo apt install haproxy -y
+```
+
+Проверка установленной версии:
+
+```bash
+haproxy -v
+```
+
+![img_39.png](img/img_39.png)
+
+### 6.2. Настройка конфигурации HAProxy
+
+Резервное копирование оригинального конфига:
+
+```bash
+sudo cp /etc/haproxy/haproxy.cfg /etc/haproxy/haproxy.cfg.bak
+```
+
+Редактирование конфигурационного файла:
+
+```bash
+sudo vi /etc/haproxy/haproxy.cfg
+```
+
+![img_40.png](img/img_40.png)
+
+### 6.4. Проверка конфигурации и запуск сервиса
+
+Проверка корректности конфигурации:
+
+```bash
+sudo haproxy -c -f /etc/haproxy/haproxy.cfg
+```
+
+Перезапуск сервиса HAProxy:
+
+```bash
+sudo systemctl enable haproxy
+sudo systemctl start haproxy
+sudo systemctl status haproxy
+```
+
+![img_41.png](img/img_41.png)
+
+### 6.5. Тестирование работы HAProxy
+
+Для проверки успешного подключения через балансировку нагрузки было выполнено:
+
+```bash
+psql -h 192.168.139.90 -p 5432 -U postgres -c "SELECT pg_is_in_recovery(), version();"
+```
+
+Результат:
+
+![img_42.png](img/img_42.png)
+
+Дополнительно проверялось, что запросы перенаправляются именно на мастер-ноду, и при её отключении — на новую мастер-ноду.
