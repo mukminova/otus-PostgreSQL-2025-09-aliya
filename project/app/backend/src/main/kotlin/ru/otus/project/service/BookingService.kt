@@ -62,8 +62,8 @@ class BookingService(
 
         val segments = segmentRepo.findAllByFlightId(flightId)
         val tickets = ticketRepo.findAllById(segments.map { it.ticketNo })
-        val bookings = bookingRepo.findAllById(tickets.map { it.booking.bookRef })
-        val bookingByRef = bookings.associateBy { it.bookRef }
+        val bookingByRef = bookingRepo.findAllById(tickets.map { it.booking.bookRef })
+            .associateBy { it.bookRef }
         return tickets.mapNotNull { ticket ->
             val booking = bookingByRef[ticket.booking.bookRef] ?: return@mapNotNull null
 

@@ -277,6 +277,7 @@ sudo mkdir -p /var/lib/postgresql/17/main
 sudo chown -R postgres:postgres /var/lib/postgresql/17
 sudo chmod 700 /var/lib/postgresql/17/main
 ```
+
 Первая нода определилась как реплика:
 
 ![img_18.png](img/img_18.png)
@@ -342,7 +343,6 @@ sudo -u postgres /opt/patroni/venv/bin/patronictl -c /etc/patroni.yml list
 
 ![img_30.png](img/img_30.png)
 
-
 ## 5. Загрузка тестовых данных в PostgreSQL
 
 Загрузим тестовые данные в мастер-ноду:
@@ -364,7 +364,6 @@ gunzip -c demo-20250901-3m.sql.gz | psql -h 192.168.139.129 -p 5432 -U postgres 
 На третьей ноде:
 
 ![img_38.png](img/img_38.png)
-
 
 ## 6. Тестирование механизма failover
 
@@ -390,7 +389,8 @@ sudo systemctl stop patroni
 
 ### 6.3. Автоматическое переключение (failover)
 
-Через несколько секунд Patroni автоматически определил недоступность мастер-ноды и произвел выбор нового мастера среди доступных реплик.
+Через несколько секунд Patroni автоматически определил недоступность мастер-ноды и произвел выбор нового мастера среди
+доступных реплик.
 
 Для проверки нового состояния кластера снова был выполнен список нод:
 
@@ -401,7 +401,6 @@ sudo -u postgres /opt/patroni/venv/bin/patronictl -c /etc/patroni.yml list
 Новый мастер был успешно выбран.
 
 ![img_32.png](img/img_32.png)
-
 
 ### 6.4. Восстановление бывшей мастер-ноды
 
@@ -417,7 +416,6 @@ Patroni автоматически определил, что эта нода д
 
 ![img_33.png](img/img_33.png)
 
-
 ### 6.5. Проверка обратного переключения (manual failover)
 
 Для проверки возможности ручного переключения был выполнен командой `patronictl`:
@@ -430,7 +428,6 @@ sudo -u postgres /opt/patroni/venv/bin/patronictl -c /etc/patroni.yml failover
 И подтвержден успешный переход роли мастера на указанную ноду.
 
 ![img_34.png](img/img_34.png)
-
 
 ## 6. Установка и настройка HAProxy
 
@@ -497,4 +494,51 @@ psql -h 192.168.139.90 -p 5432 -U postgres -c "SELECT pg_is_in_recovery(), versi
 
 ![img_42.png](img/img_42.png)
 
-Дополнительно проверялось, что запросы перенаправляются именно на мастер-ноду, и при её отключении — на новую мастер-ноду.
+## 7. Подключение кластера PostgreSQL к приложению через HAProxy
+
+На хостовую машину развернуто приложение для бронирования авиабилетов.
+Исходный код приложения(Kotlin, Spring): [src](app/backend)
+
+Подключаем базу данных через конфиг в application.yaml:
+
+```yaml
+spring:
+  datasource:
+    url: jdbc:postgresql://192.168.139.90:5000/demo
+    username: postgres
+    password: postgres
+```
+
+При запуске приложения ошибка подключения.
+Попытка подключения через терминал:
+
+```
+psql "host=192.168.139.90 port=5000 dbname=demo user=postgres gssencmode=disable"
+> psql: error: connection to server at "192.168.139.90", port 5000 failed: received invalid response to SSL negotiation: H
+```
+
+![img_43.png](img/img_43.png)
+
+Ошибка говорит, что на порту 5000 сейчас говорит HTTP‑фронтенд HAProxy, а не TCP‑проксирование PostgreSQL, необходимо
+поправить конфиг и перезагрузить HAProxy:
+
+```yaml
+defaults
+  mode    http
+```
+
+Исправить на
+
+```yaml
+defaults
+  mode    tcp
+```
+
+Ошибка ушла, приложение работает.
+
+Приложение подтягивает рейсы, есть возможность забронировать и посмотреть бронирования
+
+![img_44.png](img/img_44.png)
+![img_45.png](img/img_45.png)
+![img_46.png](img/img_46.png)
+
