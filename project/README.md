@@ -545,15 +545,6 @@ mode    tcp
 Логи HAProxy:
 ![img_47.png](img/img_47.png)
 
-Запросы адресуются на мастер-ноду patroni-1
-
-(отключить мастер, проверить, что запросы идут на реплику)
-
-понять асинхронные или синхронные ноды
-сделать одну синхрон и один аснхрон, прогнать нагрузку
-сделать обе аснхрон, прогнать нагрузку
-сравнить
-
 ## 8. Настройка мониторинга в Prometheus и Grafana
 
 ### 8.1. Установка postgres exporter(на всех нодах с PostgreSQL)
@@ -702,6 +693,7 @@ Connections -> Data sources -> Prometheus -> URL: http://otus-prometheus:9090
 ```
 sudo vi /etc/default/prometheus-postgres-exporter
 ```
+
 В блок ARGS добавляем:
 
 ```
@@ -738,8 +730,11 @@ Jan 31 15:26:48 ubuntu2 prometheus-postgres-exporter[76647]: time=2026-01-31T12:
 
 ![img_60.png](img/img_60.png)
 
-
 pg_stat_statements не включен по умолчанию, необходимо его добавить к конфигах Patroni:
+
+```
+sudo -u postgres /opt/patroni/venv/bin/patronictl -c /etc/patroni.yml edit-config
+```
 
 ![img_57.png](img/img_57.png)
 
@@ -755,6 +750,7 @@ demo=# CREATE EXTENSION pg_stat_statements;
 ![img_61.png](img/img_61.png)
 
 Перезапускаем patroni:
+
 ```
 sudo -u postgres /opt/patroni/venv/bin/patronictl -c /etc/patroni.yml restart postgres-cluster
 ```
@@ -765,4 +761,199 @@ sudo -u postgres /opt/patroni/venv/bin/patronictl -c /etc/patroni.yml restart po
 
 ![img_63.png](img/img_63.png)
 
+## 9. Тестирование производительности через pgbench
+
+### 9.1. Начальное тестирование производительности
+
+С хостовой машины инициализируем базу для тестов через HAProxy:
+
+```bash
+pgbench -h 192.168.139.90 -p 5000 -U postgres -i demo
+```
+
+И запускаем нагрузку:
+
+```bash
+pgbench -h 192.168.139.90 -p 5000 -U postgres -c 50 -j 2 -P 10 -T 600 demo
+```
+
+```
+pgbench -h 192.168.139.90 -p 5000 -U postgres -c 50 -j 2 -P 10 -T 600 demo
+...
+number of transactions actually processed: 288244
+latency average = 103.169 ms
+latency stddev = 156.652 ms
+initial connection time = 5229.027 ms
+tps = 484.510449 (without initial connection time)
+```
+
+![img_64.png](img/img_64.png)
+
+### 9.2. Тестирование производительности после оптимизации настроек PostgreSQL
+
+Поменяем в patroni параметры backend и shared memory:
+
+```
+sudo -u postgres /opt/patroni/venv/bin/patronictl -c /etc/patroni.yml edit-config
+
+postgresql:
+  parameters:
+    shared_buffers: 2GB
+    effective_cache_size: 6GB
+    work_mem: 32MB
+    maintenance_work_mem: 2GB
+```
+
+![img_66.png](img/img_66.png)
+
+Перезапускаем patroni:
+
+```
+sudo -u postgres /opt/patroni/venv/bin/patronictl -c /etc/patroni.yml restart postgres-cluster
+```
+
+![img_67.png](img/img_67.png)
+
+Было:
+
+![img_65.png](img/img_65.png)
+
+Стало:
+
+![img_68.png](img/img_68.png)
+
+Перезапустим тест:
+
+```bash
+pgbench -h 192.168.139.90 -p 5000 -U postgres -c 50 -j 2 -P 10 -T 600 demo
+```
+
+```
+pgbench -h 192.168.139.90 -p 5000 -U postgres -c 50 -j 2 -P 10 -T 600 demo
+...
+number of transactions actually processed: 271011
+latency average = 109.815 ms
+latency stddev = 165.877 ms
+initial connection time = 4780.067 ms
+tps = 455.175577 (without initial connection time)
+```
+
+![img_69.png](img/img_69.png)
+
+Прироста в производительности не наблюдается, возможно это связано с ограничениями хостовой машины.
+
+### 9.2. Тестирование производительности после добавления синхронной реплики
+
+Переведем одну ноду в синхронный режим:
+
+```
+sudo -u postgres /opt/patroni/venv/bin/patronictl -c /etc/patroni.yml edit-config
+
+synchronous_mode: true
+```
+
+![img_70.png](img/img_70.png)
+
+Проверка:
+
+![img_71.png](img/img_71.png)
+
+Перезапустим тест:
+
+```bash
+pgbench -h 192.168.139.90 -p 5000 -U postgres -c 50 -j 2 -P 10 -T 600
+```
+
+```
+number of transactions actually processed: 196210
+latency average = 151.635 ms
+latency stddev = 214.720 ms
+initial connection time = 4970.820 ms
+tps = 329.634223 (without initial connection time)
+```
+
+После включения синхронной реплики производительность упала.
+
+## 10. Тестирование failover для Patroni и HAProxy
+
+Cостояние кластера перед тестированием:
+
+```bash
+sudo -u postgres /opt/patroni/venv/bin/patronictl -c /etc/patroni.yml list
+```
+
+| Member    | Host            | Role         | State     | TL | Receive LSN | Lag | Replay LSN | Lag |
+|-----------|-----------------|--------------|-----------|----|-------------|-----|------------|-----| 
+| patroni-1 | 192.168.139.129 | Leader       | running   | 3  |             |     |            |     |
+| patroni-2 | 192.168.139.142 | Replica      | streaming | 3  | 1/3B6AE548  | 0   | 1/3B6AE548 | 0   |
+| patroni-3 | 192.168.139.90  | Sync Standby | streaming | 3  | 1/3B6AE548  | 0   | 1/3B6AE548 | 0   |
+
+![img_72.png](img/img_72.png)
+
+Отключим Patroni на мастер ноде:
+
+```bash
+sudo systemctl stop patroni
+```
+
+Для проверки состояния кластера снова выполним команду:
+
+```bash
+sudo -u postgres /opt/patroni/venv/bin/patronictl -c /etc/patroni.yml list
+```
+
+| Member      | Host              | Role           | State       | TL   | Receive LSN   | Lag   | Replay LSN   | Lag   |
+|-------------|-------------------|----------------|-------------|------|---------------|-------|--------------|-------|
+| patroni-1   | 192.168.139.129   | Replica        | stopped     |      | unknown       |       | unknown      |       |
+| patroni-2   | 192.168.139.142   | Sync Standby   | streaming   | 4    | 1/3B6AE8A8    | 0     | 1/3B6AE8A8   | 0     |
+| patroni-3   | 192.168.139.90    | Leader         | running     | 4    |               |       |              |       |
+
+
+![img_73.png](img/img_73.png)
+
+Новый мастер был успешно выбран.
+
+Поработаем с базой через наше приложение - проверим список рейсов, забронируем несколько тестовых пассажиров на рейс: 
+
+![img_74.png](img/img_74.png)
+
+Проверим статус HAProxy:
+
+```bash
+sudo systemctl status haproxy
+```
+
+Запросы идут на новую мастер-ноду patorni-3:
+
+```
+Jan 31 21:24:51 ubuntu3 haproxy[9745]: 192.168.139.3:51652 [31/Jan/2026:21:24:01.463] postgres_rw patroni_rw/patroni-3
+1/0/50066 716 cD 3/3/2/2/0 0/0
+```
+
+![img_75.png](img/img_75.png)
+
+Вернем бывшую мастер-ноду в строй:
+
+```bash
+sudo systemctl start patroni
+```
+
+Статус кластера после восстановления:
+
+![img_76.png](img/img_76.png)
+
+Дополнительно проверим выполнив запрос на восстановленную мастер-ноду patorni-1:
+
+```sql
+select b.book_ref,  f.route_no, t.passenger_name, f.scheduled_departure 
+from bookings b
+    join tickets t on b.book_ref = t.book_ref
+    join segments s on t.ticket_no = s.ticket_no
+    join flights f on s.flight_id = f.flight_id
+where t.passenger_name like '%test%';
+```
+
+![img_77.png](img/img_77.png)
+
+Все данные успешно восстановлены.
 
