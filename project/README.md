@@ -524,14 +524,14 @@ psql "host=192.168.139.90 port=5000 dbname=demo user=postgres gssencmode=disable
 
 ```yaml
 defaults
-  mode    http
+mode    http
 ```
 
 Исправить на
 
 ```yaml
 defaults
-  mode    tcp
+mode    tcp
 ```
 
 Ошибка ушла, приложение работает.
@@ -541,4 +541,228 @@ defaults
 ![img_44.png](img/img_44.png)
 ![img_45.png](img/img_45.png)
 ![img_46.png](img/img_46.png)
+
+Логи HAProxy:
+![img_47.png](img/img_47.png)
+
+Запросы адресуются на мастер-ноду patroni-1
+
+(отключить мастер, проверить, что запросы идут на реплику)
+
+понять асинхронные или синхронные ноды
+сделать одну синхрон и один аснхрон, прогнать нагрузку
+сделать обе аснхрон, прогнать нагрузку
+сравнить
+
+## 8. Настройка мониторинга в Prometheus и Grafana
+
+### 8.1. Установка postgres exporter(на всех нодах с PostgreSQL)
+
+```bash
+sudo apt install -y prometheus-postgres-exporter
+```
+
+![img_48.png](img/img_48.png)
+
+Добавить в конфиг /etc/default/prometheus-postgres-exporter параметр:
+
+![img_49.png](img/img_49.png)
+
+Запуск:
+
+```bash
+sudo systemctl enable --now prometheus-postgres-exporter
+```
+
+Проверка:
+
+```bash
+curl http://localhost:9187/metrics
+```
+
+![img_50.png](img/img_50.png)
+
+### 8.2. Установка haproxy exporter(на ноде с HAProxy)
+
+```bash
+sudo apt install -y prometheus-haproxy-exporter
+```
+
+![img_52.png](img/img_52.png)
+
+Добавить в конфиг /etc/default/prometheus-haproxy-exporter параметр:
+
+![img_51.png](img/img_51.png)
+
+Запуск:
+
+```bash
+sudo systemctl enable --now prometheus-haproxy-exporter
+```
+
+Проверка:
+
+```bash
+curl http://localhost:9101/metrics
+```
+
+![img_53.png](img/img_53.png)
+
+### 8.3. Установка Prometheus и Grafana
+
+На машине хоста в docker-compose.yml добавить:
+
+```yaml
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    container_name: otus-prometheus
+    restart: always
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+```
+
+А также для Grafana:
+
+```yaml
+  grafana:
+    image: grafana/grafana:10.3.1
+    container_name: otus-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana-data:/var/lib/grafana
+```
+
+Конфигурационный файл для Prometheus:
+
+```yaml
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  - job_name: patroni
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - 192.168.139.129:8008
+          - 192.168.139.142:8008
+          - 192.168.139.90:8008
+
+  - job_name: postgres
+    static_configs:
+      - targets:
+          - 192.168.139.129:9187
+          - 192.168.139.142:9187
+          - 192.168.139.90:9187
+
+  - job_name: haproxy
+    static_configs:
+      - targets:
+          - 192.168.139.90:9101
+```
+
+Запуск:
+
+```bash
+docker-compose up -d
+```
+
+Открыть в браузере http://localhost:3000/
+
+![img_54.png](img/img_54.png)
+
+Добавить prometheus как источник данных:
+
+Connections -> Data sources -> Prometheus -> URL: http://otus-prometheus:9090
+
+![img_55.png](img/img_55.png)
+
+Для мониторинга можно выбрать готовые дашборды,
+например https://grafana.com/grafana/dashboards/18870-postgresql-patroni/
+и https://grafana.com/grafana/dashboards/9628-postgresql-database/:
+
+![img_56.png](img/img_56.png)
+
+Некоторые из панелей частично не отображаются, поскольку не все collectors включены по умолчанию. Для того чтобы
+посмотреть список доступных collectors, нужно выполнить запрос:
+
+```bash
+/usr/bin/prometheus-postgres-exporter --help
+```
+
+![img_58.png](img/img_58.png)
+
+Добавляем нужные collectors в конфиг /etc/default/prometheus-postgres-exporter:
+
+```
+sudo vi /etc/default/prometheus-postgres-exporter
+```
+В блок ARGS добавляем:
+
+```
+ARGS="\
+  --web.listen-address=:9187 \
+  --log.level=info \
+  --collector.database_wraparound \
+  --collector.long_running_transactions \
+  --collector.postmaster \
+  --collector.process_idle \
+  --collector.stat_activity_autovacuum \
+  --collector.stat_checkpointer \
+  --collector.stat_statements \
+  --collector.stat_wal_receiver \
+  --collector.statio_user_indexes \
+"
+```
+
+![img_59.png](img/img_59.png)
+
+Перезапускаем exporter:
+
+```
+sudo systemctl daemon-reload
+sudo systemctl restart prometheus-postgres-exporter
+sudo systemctl status prometheus-postgres-exporter
+```
+
+Возникла ошибка - pq: relation \"pg_stat_statements\" does not exist
+
+```
+Jan 31 15:26:48 ubuntu2 prometheus-postgres-exporter[76647]: time=2026-01-31T12:26:48.764Z level=ERROR source=collector.go:201 msg="collector failed" name=stat_statements duration_seconds=0.010840585 err="pq: relation \"pg_stat_statements\" does not exist"
+```
+
+![img_60.png](img/img_60.png)
+
+
+pg_stat_statements не включен по умолчанию, необходимо его добавить к конфигах Patroni:
+
+![img_57.png](img/img_57.png)
+
+И добавить расширение pg_stat_statements в мастер-ноду:
+
+```
+psql -h localhost -U postgres -d postgres
+postgres=# \c demo
+You are now connected to database "demo" as user "postgres".
+demo=# CREATE EXTENSION pg_stat_statements;
+```
+
+![img_61.png](img/img_61.png)
+
+Перезапускаем patroni:
+```
+sudo -u postgres /opt/patroni/venv/bin/patronictl -c /etc/patroni.yml restart postgres-cluster
+```
+
+Возвращаемся в Grafana и обновляем дашборд:
+
+![img_62.png](img/img_62.png)
+
+![img_63.png](img/img_63.png)
+
 
