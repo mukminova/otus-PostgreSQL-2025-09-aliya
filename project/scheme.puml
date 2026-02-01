@@ -1,0 +1,71 @@
+@startuml
+!theme plain
+skinparam componentStyle rectangle
+skinparam shadowing false
+
+title Patroni + PostgreSQL + etcd + HAProxy cluster
+
+actor "Application" as app
+
+node "VM1\n192.168.139.129" {
+  component "Patroni\npatroni-1" as patroni1
+  component "PostgreSQL\n:5432" as pg1
+  component "etcd\nnode-1\n:2379" as etcd1
+}
+
+node "VM2\n192.168.139.142" {
+  component "Patroni\npatroni-2" as patroni2
+  component "PostgreSQL\n:5432" as pg2
+  component "etcd\nnode-2\n:2379" as etcd2
+}
+
+node "VM3\n192.168.139.90" {
+  component "Patroni\npatroni-3" as patroni3
+  component "HAProxy" as haproxy
+  component "PostgreSQL\n:5432" as pg3
+  component "etcd\nnode-3\n:2379" as etcd3
+}
+
+' Application connections
+app --> haproxy : JDBC\nRW:5000 / RO:5001
+
+' HAProxy routing
+haproxy --> pg1 : RW traffic\n(port 5432)
+haproxy --> pg2 : RO traffic\n(port 5432)
+haproxy --> pg3 : RO traffic\n(port 5432)
+
+' Patroni controls PostgreSQL
+patroni1 --> pg1
+patroni2 --> pg2
+patroni3 --> pg3
+
+' Patroni <-> etcd
+patroni1 --> etcd1
+patroni2 --> etcd2
+patroni3 --> etcd3
+
+
+' etcd cluster
+etcd1 <--> etcd2 : raft
+etcd2 <--> etcd3 : raft
+etcd3 <--> etcd1 : raft
+
+' PostgreSQL replication
+pg1 --> pg2 : streaming replication
+pg1 --> pg3 : streaming replication
+
+note right of haproxy
+RW port: 5000
+RO port: 5001
+Health checks:
+Patroni REST API :8008
+end note
+
+note bottom of etcd1
+DCS:
+ /db/postgres-cluster
+ Leader lock
+ Cluster state
+end note
+
+@enduml

@@ -11,7 +11,7 @@ import ru.otus.project.entity.Ticket
 
 @Repository
 interface FlightRepository : JpaRepository<Flight, Long> {
-    @Query("SELECT f FROM Flight f WHERE f.status = 'Scheduled' AND CURRENT_TIMESTAMP < f.scheduledDeparture")
+    @Query("SELECT f FROM Flight f WHERE f.status = 'Scheduled'")
     fun findScheduledFlights(): List<Flight>
 }
 

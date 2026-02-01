@@ -601,7 +601,7 @@ curl http://localhost:9101/metrics
 
 ### 8.3. Установка Prometheus и Grafana
 
-На машине хоста в docker-compose.yml добавить:
+На хостовой машине создать файл [docker-compose.yml](docker/docker-compose.yml) с содержимым:
 
 ```yaml
   prometheus:
@@ -629,7 +629,7 @@ curl http://localhost:9101/metrics
       - grafana-data:/var/lib/grafana
 ```
 
-Конфигурационный файл для Prometheus:
+Конфигурационный файл для Prometheus [prometheus.yml](docker/prometheus.yml):
 
 ```yaml
 global:
